@@ -1,59 +1,60 @@
 # app.py
 import streamlit as st
 import pandas as pd
-import numpy as np
-from binance.client import Client
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
+import requests
 
-# Konfigurasi Streamlit
-st.set_page_config(page_title="Prediksi Harga Crypto - Tokocrypto", layout="centered")
-st.title("📈 Prediksi Harga Crypto (Tokocrypto)")
+st.set_page_config(page_title="Prediksi Harga Crypto Tokocrypto", layout="wide")
+st.title("📈 Prediksi Harga Crypto (Data Binance/Tokocrypto)")
 
-# Form input API key
-st.sidebar.header("🔐 API Key Binance")
-api_key = st.sidebar.text_input("API Key", type="password")
-api_secret = st.sidebar.text_input("API Secret", type="password")
+@st.cache_data
+def get_data():
+    url = "https://api.binance.com/api/v3/klines"
+    params = {"symbol": "BTCUSDT", "interval": "1m", "limit": 1000}  # 1 menit terakhir
+    response = requests.get(url, params=params)
 
-symbol = st.sidebar.text_input("Symbol", value="BTCUSDT")
-interval = st.sidebar.selectbox("Interval", ["1h", "4h", "1d"])
-limit = st.sidebar.slider("Jumlah Data (candles)", 100, 1000, 500)
+    if response.status_code != 200:
+        return None
 
-if st.sidebar.button("🚀 Ambil Data"):
-    try:
-        client = Client(api_key, api_secret)
-        klines = client.get_klines(symbol=symbol, interval=interval, limit=limit)
+    data = response.json()
+    df = pd.DataFrame(data, columns=[
+        "timestamp", "open", "high", "low", "close", "volume",
+        "_1", "_2", "_3", "_4", "_5", "_6"
+    ])
 
-        df = pd.DataFrame(klines, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-        ])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    df["timestamp"] = df["timestamp"].dt.tz_localize("UTC").dt.tz_convert("Asia/Jakarta")  # 👉 Ubah ke WIB
+    df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
+    df["target"] = df["close"].shift(-1)
 
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df.set_index('timestamp', inplace=True)
-        df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+    return df.dropna()
 
-        st.subheader("📊 Data Harga")
-        st.dataframe(df.tail(10))
+df = get_data()
 
-        # Fitur dan Target
-        X = df[['open', 'high', 'low', 'volume']]
-        y = df['close']
+if df is None or len(df) < 10:
+    st.error("❌ Gagal mengambil data atau data terlalu sedikit.")
+    st.stop()
 
-        # Split
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+# Model
+X = df[["open", "high", "low", "volume"]]
+y = df["target"]
 
-        # Model
-        model = LinearRegression()
-        model.fit(X_train, y_train)
+if len(X) > 1:
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    akurasi = model.score(X_test, y_test)
+    st.success(f"Model Akurasi: {akurasi:.2f}")
+else:
+    st.warning("⚠️ Data terlalu sedikit untuk pelatihan model.")
+    st.stop()
 
-        # Prediksi
-        y_pred = model.predict(X_test)
+# Tampilan Data Terbaru
+st.subheader("📊 Data Terbaru")
+st.dataframe(df.tail())
 
-        st.subheader("📈 Hasil Prediksi")
-        pred_df = pd.DataFrame({"Actual": y_test, "Predicted": y_pred}, index=y_test.index)
-        st.line_chart(pred_df)
-
-    except Exception as e:
-        st.error(f"❌ Gagal ambil data: {e}")
+# Prediksi Harga Selanjutnya
+last_data = X.tail(1)
+prediksi = model.predict(last_data)
+st.success(f"🎯 Prediksi Harga Selanjutnya: ${prediksi[0]:,.2f}")
